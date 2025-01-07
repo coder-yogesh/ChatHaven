@@ -277,7 +277,6 @@ function App() {
                               boxShadow: 'rgba(100, 100, 111, 0.2) 0px 7px 29px 0px',
                               whiteSpace: 'pre-line',
                               textAlign: 'left',
-                              padding: '10px',
                             }}
                             dangerouslySetInnerHTML={{ __html: msg.message }}
                           />
