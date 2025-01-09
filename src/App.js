@@ -179,7 +179,7 @@ function App() {
     }, [location, navigate, userDetails]);
     const logout = () => {
       localStorage.clear();
-      window.location.href = "http://localhost:4000/api/auth/logout"
+      window.location.href = `${process.env.REACT_APP_API_URL}api/auth/logout`
     }
     const handleMenuClick = ({ key }) => {
       switch (key) {
@@ -394,7 +394,7 @@ function App() {
   }
   const Login = () => {
     const submitGo = () => {
-      window.location.href = "http://localhost:4000/api/auth/google"
+      window.location.href = `${process.env.REACT_APP_API_URL}api/auth/google`
     }
     return (
       <Flex
