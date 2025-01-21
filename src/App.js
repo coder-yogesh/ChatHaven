@@ -239,7 +239,8 @@ function App() {
                               trigger={['click']}>
                                 
                               <Avatar
-                                src={`${process.env.REACT_APP_API_URL}proxy-image?url=${encodeURIComponent(userDetails?.user.picture)}`}
+                                // src={`${process.env.REACT_APP_API_URL}proxy-image?url=${encodeURIComponent(userDetails?.user.picture)}`}
+                                src={userDetails?.user.picture}
                                 size="large"
                                 loading="lazy"
                                 style={{ cursor: "pointer", marginTop: '10px' }}
@@ -326,7 +327,8 @@ function App() {
                               minWidth: '24px',
                               maxWidth: '24px',
                               margin: '10px', }}
-                              src={`${process.env.REACT_APP_API_URL}proxy-image?url=${encodeURIComponent(userDetails?.user.picture)}`}
+                              src={userDetails?.user.picture}
+                              // src={`${process.env.REACT_APP_API_URL}proxy-image?url=${encodeURIComponent(userDetails?.user.picture)}`}
                             size="small">
                                 {/* {userDetails?.user.name?.charAt(0)} */}
                             </Avatar>
