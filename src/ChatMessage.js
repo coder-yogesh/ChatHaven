@@ -1,24 +1,42 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { Layout, Input } from "antd";
 import {
   OpenAIOutlined,
-  UserOutlined,
   CopyOutlined,
   CheckOutlined,
   EditOutlined,
   CloseOutlined,
+  FileTextOutlined,
+  FolderOutlined,
+  CodeOutlined,
 } from "@ant-design/icons";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import MessageActions from "./MessageActions";
 import ImageModal from "./ImageModal";
-import { copyToClipboard } from "./messageUtils";
+import {
+  copyToClipboard,
+  annotateCodeBlockFilenames,
+  extractCodeFiles,
+  formatCodebase,
+} from "./messageUtils";
 
 const { Content } = Layout;
 const { TextArea } = Input;
 
-function CodeBlock({ language, value }) {
+// Capitalizes a language tag for display, e.g. "javascript" -> "JavaScript",
+// "js" -> "Js". Falls back to "Text" when no language was detected.
+function formatLangLabel(language) {
+  if (!language) return "Text";
+  const known = { js: "JavaScript", jsx: "JSX", ts: "TypeScript", tsx: "TSX", py: "Python", sh: "Shell", bash: "Bash", json: "JSON", html: "HTML", css: "CSS" };
+  const lower = language.toLowerCase();
+  if (known[lower]) return known[lower];
+  return lower.charAt(0).toUpperCase() + lower.slice(1);
+}
+
+function CodeBlock({ language, filename, value }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = () => {
     copyToClipboard(value).then(() => {
@@ -30,19 +48,73 @@ function CodeBlock({ language, value }) {
   return (
     <div className="code-block">
       <div className="code-block-header">
-        <span className="code-lang">{language || "text"}</span>
-        <button className="copy-btn" onClick={handleCopy}>
+        {filename ? (
+          <span className="code-filename">
+            <FileTextOutlined />
+            {filename}
+          </span>
+        ) : (
+          <span className="code-lang">
+            <CodeOutlined />
+            {formatLangLabel(language)}
+          </span>
+        )}
+        <button className="copy-icon-btn" onClick={handleCopy} title={copied ? "Copied" : "Copy code"}>
           {copied ? <CheckOutlined /> : <CopyOutlined />}
-          {copied ? "Copied" : "Copy"}
         </button>
       </div>
       <SyntaxHighlighter
-        language={language || "javascript"}
+        language={language || "text"}
         style={oneDark}
-        customStyle={{ margin: 0, borderRadius: "0 0 8px 8px", fontSize: 13 }}
+        customStyle={{ margin: 0, borderRadius: "0 0 10px 10px", fontSize: 13 }}
       >
         {value}
       </SyntaxHighlighter>
+    </div>
+  );
+}
+
+function CodebaseBar({ files }) {
+  const [copiedAll, setCopiedAll] = useState(false);
+  const [copiedIndex, setCopiedIndex] = useState(null);
+
+  const handleCopyAll = () => {
+    copyToClipboard(formatCodebase(files)).then(() => {
+      setCopiedAll(true);
+      setTimeout(() => setCopiedAll(false), 1500);
+    });
+  };
+
+  const handleCopyOne = (index) => {
+    copyToClipboard(files[index].code).then(() => {
+      setCopiedIndex(index);
+      setTimeout(() => setCopiedIndex(null), 1500);
+    });
+  };
+
+  return (
+    <div className="codebase-bar">
+      <div className="codebase-bar-top">
+        <span className="codebase-bar-label">
+          <FolderOutlined /> {files.length} files
+        </span>
+        <button className="copy-icon-btn" onClick={handleCopyAll} title={copiedAll ? "Copied all files" : "Copy all files"}>
+          {copiedAll ? <CheckOutlined /> : <CopyOutlined />}
+        </button>
+      </div>
+
+      <ul className="codebase-file-list">
+        {files.map((f, i) => (
+          <li key={f.filename + i} className="codebase-file-item">
+            <span className="codebase-file-name">
+              <FileTextOutlined /> {f.filename}
+            </span>
+            <button className="copy-icon-btn" onClick={() => handleCopyOne(i)} title={`Copy ${f.filename}`}>
+              {copiedIndex === i ? <CheckOutlined /> : <CopyOutlined />}
+            </button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -67,6 +139,11 @@ function UserBubble({ message, imageUrl, onSave, onImageClick }) {
   if (editing) {
     return (
       <div className="bubble user-bubble editing">
+        {imageUrl && (
+          <div className="user-image-attachment" onClick={() => onImageClick?.(imageUrl)}>
+            <img src={imageUrl} alt="attached" />
+          </div>
+        )}
         <TextArea
           autoFocus
           value={draft}
@@ -119,82 +196,98 @@ export default function ChatMessages({ messages, loading, onEditMessage, onRegen
   const [modalImage, setModalImage] = useState(null);
 
   return (
-    <Content style={{ padding: 16, overflowY: "auto" }} className="chat-body" id="chat-container">
+    <Content className="chat-body" id="chat-container">
       <ImageModal src={modalImage} onClose={() => setModalImage(null)} />
-      {messages.map((msg, i) => {
-        const isBot = msg.type === "gpt";
-        const messageId = msg.id ?? `msg-${i}`;
 
-        if (!isBot) {
+      <div className="chat-column">
+        {messages.map((msg, i) => {
+          const isBot = msg.type === "gpt";
+          const messageId = msg.id ?? `msg-${i}`;
+
+          if (!isBot) {
+            return (
+              <div key={messageId} className="message-row user">
+                <UserBubble
+                  message={msg.message}
+                  imageUrl={msg.imageUrl}
+                  onSave={(newText) => onEditMessage && onEditMessage(i, newText)}
+                  onImageClick={setModalImage}
+                />
+              </div>
+            );
+          }
+
           return (
-            <div key={messageId} className="message-row user">
-              <UserBubble
-                message={msg.message}
-                imageUrl={msg.imageUrl}
-                onSave={(newText) => onEditMessage && onEditMessage(i, newText)}
-                onImageClick={setModalImage}
-              />
-              <div className="avatar user-avatar">
-                <UserOutlined />
+            <div key={messageId} className="message-row bot">
+              <div className="avatar bot-avatar">
+                <OpenAIOutlined />
+              </div>
+              <div className="bot-message-wrap">
+                {/* {(() => {
+                  const codeFiles = extractCodeFiles(msg.message);
+                  return codeFiles.length > 1 ? <CodebaseBar files={codeFiles} /> : null;
+                })()} */}
+                <div className="bot-text">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      code({ className, children }) {
+                        // className looks like "language-json:package.json" when
+                        // annotateCodeBlockFilenames() detected a filename, or
+                        // just "language-json" otherwise.
+                        const match = /language-([\w+-]+)(?::(.+))?/.exec(className || "");
+                        const value = String(children).replace(/\n$/, "");
+                        // Don't rely on the `inline` prop — react-markdown v9+
+                        // stopped passing it. Instead: a fenced block always
+                        // carries a "language-*" className OR spans multiple
+                        // lines; a genuine inline `code` snippet has neither.
+                        const isInline = !match && !value.includes("\n");
+                        return isInline ? (
+                          <code className="inline-code">{value}</code>
+                        ) : (
+                          <CodeBlock language={match?.[1]} filename={match?.[2]} value={value} />
+                        );
+                      },
+                      img({ src, alt }) {
+                        return <img src={src} alt={alt} onClick={() => setModalImage(src)} />;
+                      },
+                      table({ children }) {
+                        return (
+                          <div className="table-wrap">
+                            <table>{children}</table>
+                          </div>
+                        );
+                      },
+                    }}
+                  >
+                    {annotateCodeBlockFilenames(msg.message)}
+                  </ReactMarkdown>
+                </div>
+                <MessageActions
+                  messageId={messageId}
+                  rawMessage={msg.message}
+                  onRegenerate={onRegenerate ? () => onRegenerate(i) : undefined}
+                />
               </div>
             </div>
           );
-        }
+        })}
 
-        return (
-          <div key={messageId} className="message-row bot">
+        {loading && (
+          <div className="message-row bot">
             <div className="avatar bot-avatar">
               <OpenAIOutlined />
             </div>
             <div className="bot-message-wrap">
-              <div className="bubble bot-bubble">
-                <ReactMarkdown
-                  components={{
-                    code({ inline, className, children }) {
-                      const match = /language-(\w+)/.exec(className || "");
-                      const value = String(children).replace(/\n$/, "");
-                      return inline ? (
-                        <code className="inline-code">{value}</code>
-                      ) : (""
-                        // <CodeBlock language={match?.[1]} value={value} />
-                      );
-                    },
-                    img({ src, alt }) {
-                      return (
-                        <img
-                          src={src}
-                          alt={alt}
-                          onClick={() => setModalImage(src)}
-                        />
-                      );
-                    },
-                  }}
-                >
-                  {msg.message}
-                </ReactMarkdown>
+              <div className="typing-indicator">
+                <span className="dot" />
+                <span className="dot" />
+                <span className="dot" />
               </div>
-              <MessageActions
-                messageId={messageId}
-                rawMessage={msg.message}
-                onRegenerate={onRegenerate ? () => onRegenerate(i) : undefined}
-              />
             </div>
           </div>
-        );
-      })}
-
-      {loading && (
-        <div className="message-row bot">
-          <div className="avatar bot-avatar">
-            <OpenAIOutlined />
-          </div>
-          <div className="bubble bot-bubble typing-bubble">
-            <span className="dot" />
-            <span className="dot" />
-            <span className="dot" />
-          </div>
-        </div>
-      )}
+        )}
+      </div>
     </Content>
   );
 }

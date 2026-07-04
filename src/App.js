@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import Googlelogo from "./assets/Google Logo.png";
 import Logo from "./assets/large-removebg-preview.png";
+import smallLogo from "./assets/large.png";
 import { Avatar, Button, Col, Dropdown, Flex, Layout } from "antd";
 import { chatGpt } from "./services/api";
 import { Content, Header } from "antd/es/layout/layout";
 import { jwtDecode } from "jwt-decode";
 import ChatMessages from "./ChatMessage";
 import ChatInput from "./ChatInput";
+import EmptyState from "./EmptyState";
 
 const isExtension =
   typeof chrome !== "undefined" &&
@@ -221,6 +223,15 @@ function App() {
     sendPrompt(inputText, updated, fileToSend);
   };
 
+  // 🔹 Suggestion card clicked on the empty-state screen: sends that prompt
+  // immediately, same as typing it and hitting send.
+  const handleSuggestionClick = (promptText) => {
+    const userMessage = { id: makeId(), type: "user", message: promptText };
+    const updated = [...messages, userMessage];
+    setMessages(updated);
+    sendPrompt(promptText, updated);
+  };
+
   // 🔹 Edit one of your own messages: truncate everything after it and
   // re-send the edited text, replacing the bot's original reply. If the
   // original message had an attached image, resend that same image too —
@@ -264,10 +275,10 @@ function App() {
   return (
     <Flex style={{ height: "100vh" }} justify="center">
       <Layout style={{ width: "100%" }}>
-        <Header style={{ display: "flex", justifyContent: "space-between" }}>
-          <div style={{ display: "flex" }}>
-            <img src={Logo} width={35} />
-            <h3>ChatHaven</h3>
+        <Header className="app-header">
+          <div className="app-brand">
+            <img src={smallLogo} alt="ChatHaven" className="app-logo" />
+            <h2 className="app-title">ChatHaven</h2>
           </div>
 
           <Dropdown
@@ -275,19 +286,26 @@ function App() {
               items: [{ key: "logout", label: "Logout" }],
               onClick: logout
             }}
+            trigger={["click"]}
+            placement="bottomRight"
           >
-            {/* ✅ FIXED IMAGE */}
-            <Avatar src={user?.picture} />
+            <div className="app-user-trigger">
+              <Avatar src={user?.picture} size={34} />
+            </div>
           </Dropdown>
         </Header>
 
         <div ref={containerRef} style={{ flex: 1, overflowY: "auto" }}>
-          <ChatMessages
-            messages={messages}
-            loading={loading}
-            onEditMessage={handleEditMessage}
-            onRegenerate={handleRegenerate}
-          />
+          {messages.length === 0 ? (
+            <EmptyState userName={user?.name} onSuggestionClick={handleSuggestionClick} />
+          ) : (
+            <ChatMessages
+              messages={messages}
+              loading={loading}
+              onEditMessage={handleEditMessage}
+              onRegenerate={handleRegenerate}
+            />
+          )}
         </div>
 
         <ChatInput
