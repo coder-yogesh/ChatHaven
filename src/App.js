@@ -50,6 +50,8 @@ function App() {
     const params = new URLSearchParams(window.location.search);
     const urlToken = params.get("token");
 
+    console.log("URL Params:", params.toString());
+    console.log("URL Token:", urlToken);
     if (urlToken) {
       try {
         const decoded = jwtDecode(urlToken);
