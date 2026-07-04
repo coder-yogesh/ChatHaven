@@ -3,17 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "dependencies": {
-    "@ant-design/icons": "^5.5.2",
-    "antd": "^5.22.6",
+    "@ant-design/icons": "^5.6.1",
+    "antd": "^5.29.3",
     "axios": "^1.7.9",
     "cra-template": "1.2.0",
     "dompurify": "^3.2.3",
     "jwt-decode": "^4.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-markdown": "^9.0.1",
+    "react-markdown": "^9.1.0",
     "react-router-dom": "^7.1.1",
-    "react-scripts": "5.0.1"
+    "react-scripts": "5.0.1",
+    "react-syntax-highlighter": "^16.1.1"
   },
   "scripts": {
     "start": "react-scripts start",

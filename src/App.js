@@ -1,13 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import Googlelogo from "./assets/Google Logo.png";
 import Logo from "./assets/large-removebg-preview.png";
 import { Avatar, Button, Col, Dropdown, Flex, Layout } from "antd";
 import { chatGpt } from "./services/api";
-import { Content, Footer, Header } from "antd/es/layout/layout";
-import { OpenAIOutlined } from "@ant-design/icons";
-import TextArea from "antd/es/input/TextArea";
+import { Content, Header } from "antd/es/layout/layout";
 import { jwtDecode } from "jwt-decode";
+import ChatMessages from "./ChatMessage";
+import ChatInput from "./ChatInput";
 
 const isExtension =
   typeof chrome !== "undefined" &&
@@ -16,12 +16,26 @@ const isExtension =
 
 const API_URL = process.env.REACT_APP_API_URL || "http://localhost:4000/";
 
+// Stable id per message so feedback (like/dislike) can reference a specific
+// message even after edits/regenerations reshuffle the array.
+const makeId = () =>
+  (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
+
 function App() {
   const [token, setToken] = useState(null);
   const [user, setUser] = useState(null);
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [q, setQ] = useState("");
+  const containerRef = useRef(null);
+
+  const [imageFile, setImageFile] = useState(null);
+
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages, loading]);
 
   // 🔥 Load token from storage
   useEffect(() => {
@@ -167,41 +181,72 @@ function App() {
   }
 
   // 🔹 CHAT LOGIC
-  const submit = async () => {
-    if (!q.trim()) return;
-
+  // NOTE: message is stored as raw markdown (no manual regex → HTML
+  // formatting). ChatMessages renders markdown + code blocks itself via
+  // react-markdown, so pre-formatting here would just fight with that.
+  // `file` is passed through to chatGpt() so images actually reach the API.
+  const sendPrompt = async (inputText, history, file) => {
     setLoading(true);
-
-    const userMessage = { type: "user", message: q };
-    setMessages((prev) => [...prev, userMessage]);
-
-    const inputText = q;
-    setQ("");
-
     try {
-      const res = await chatGpt(inputText);
+      const res = await chatGpt(inputText, file);
 
-      const formattedMessage = res.message
-        .replace(/^\d+\.\s*/gm, "")
-        .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
-        .replace(/```([\s\S]+?)```/g, (match, code) => {
-          return `<pre><code>${code}</code></pre>`;
-        });
-
-      const botMessage = {
-        type: "gpt",
-        message: formattedMessage,
-      };
-
-      setMessages((prev) => [...prev, botMessage]);
+      const botMessage = { id: makeId(), type: "gpt", message: res.message };
+      setMessages([...history, botMessage]);
     } catch (error) {
-      setMessages((prev) => [
-        ...prev,
-        { type: "gpt", message: "❌ Error fetching response" }
+      setMessages([
+        ...history,
+        { id: makeId(), type: "gpt", message: "❌ Error fetching response" },
       ]);
     } finally {
       setLoading(false);
     }
+  };
+
+  const submit = async () => {
+    if (!q.trim() && !imageFile) return;
+
+    // Local preview URL so the sent image shows up inline in the chat log.
+    // Keep the actual File too (imageFile) so if this message gets edited
+    // later, we can resend the same image instead of losing it.
+    const imageUrl = imageFile ? URL.createObjectURL(imageFile) : undefined;
+    const userMessage = { id: makeId(), type: "user", message: q, imageUrl, imageFile };
+    const updated = [...messages, userMessage];
+    setMessages(updated);
+
+    const inputText = q.trim() || "Describe this image.";
+    const fileToSend = imageFile;
+    setQ("");
+    setImageFile(null);
+
+    sendPrompt(inputText, updated, fileToSend);
+  };
+
+  // 🔹 Edit one of your own messages: truncate everything after it and
+  // re-send the edited text, replacing the bot's original reply. If the
+  // original message had an attached image, resend that same image too —
+  // otherwise the edited request would silently lose it.
+  const handleEditMessage = (index, newText) => {
+    const original = messages[index];
+    const truncated = messages.slice(0, index);
+    const editedMessage = {
+      id: makeId(),
+      type: "user",
+      message: newText,
+      imageUrl: original?.imageUrl,
+      imageFile: original?.imageFile,
+    };
+    const updated = [...truncated, editedMessage];
+    setMessages(updated);
+    sendPrompt(newText, updated, original?.imageFile);
+  };
+
+  // 🔹 Regenerate a bot reply: find the user message that produced it and
+  // re-send it (including its image, if any), replacing this reply.
+  const handleRegenerate = (index) => {
+    const priorUserMsg = [...messages.slice(0, index)].reverse().find((m) => m.type === "user");
+    if (!priorUserMsg) return;
+    const truncated = messages.slice(0, index);
+    sendPrompt(priorUserMsg.message, truncated, priorUserMsg.imageFile);
   };
 
   // 🔹 LOGOUT
@@ -236,47 +281,24 @@ function App() {
           </Dropdown>
         </Header>
 
-        <Content
-          style={{ padding: 10, overflowY: "auto" }}
-          className="chat-body"
-          id="chat-container"
-        >
-          {messages.map((msg, i) => (
-            <div key={i} className={`message ${msg.type === "gpt" ? "bot" : "user"}`}>
-              {msg.type === "gpt" ? (
-                <div style={{ display: "flex" }}>
-                  <OpenAIOutlined style={{ marginRight: "5px" }} />
-                  <div
-                    className="bubble"
-                    dangerouslySetInnerHTML={{ __html: msg.message }}
-                  />
-                </div>
-              ) : (
-                <div className="bubble" style={{ textAlign: "right" }}>
-                  {msg.message}
-                </div>
-              )}
-            </div>
-          ))}
+        <div ref={containerRef} style={{ flex: 1, overflowY: "auto" }}>
+          <ChatMessages
+            messages={messages}
+            loading={loading}
+            onEditMessage={handleEditMessage}
+            onRegenerate={handleRegenerate}
+          />
+        </div>
 
-          {loading && <div className="typing">Typing...</div>}
-        </Content>
-
-        <Footer>
-          <div className="chat-footer">
-            <TextArea
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Message ChatHaven"
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  submit();
-                }
-              }}
-            />
-          </div>
-        </Footer>
+        <ChatInput
+          value={q}
+          onChange={setQ}
+          onSend={submit}
+          imageFile={imageFile}
+          onImageSelect={setImageFile}
+          onImageRemove={() => setImageFile(null)}
+          loading={loading}
+        />
       </Layout>
     </Flex>
   );
