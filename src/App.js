@@ -2,14 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import Googlelogo from "./assets/Google Logo.png";
 import Logo from "./assets/large-removebg-preview.png";
-import smallLogo from "./assets/large.png";
 import { Avatar, Button, Col, Dropdown, Flex, Layout } from "antd";
-import { chatGpt } from "./services/api";
+import { chatGpt, fetchChats, createChat, fetchChat, saveChatMessages, deleteChat } from "./services/api";
 import { Content, Header } from "antd/es/layout/layout";
 import { jwtDecode } from "jwt-decode";
 import ChatMessages from "./ChatMessage";
 import ChatInput from "./ChatInput";
 import EmptyState from "./EmptyState";
+import Sidebar from "./Sidebar";
+import SettingsModal from "./SettingsModal";
 
 const isExtension =
   typeof chrome !== "undefined" &&
@@ -32,6 +33,12 @@ function App() {
   const containerRef = useRef(null);
 
   const [imageFile, setImageFile] = useState(null);
+
+  const [chats, setChats] = useState([]);
+  const [activeChatId, setActiveChatId] = useState(null);
+
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "dark");
 
 
   useEffect(() => {
@@ -120,6 +127,52 @@ function App() {
     document.body.className = isExtension ? "extension" : "web";
   }, []);
 
+  // 🔹 Apply the chosen theme to <html data-theme="...">. "system" tracks
+  // the OS preference live, updating if the user changes it mid-session.
+  useEffect(() => {
+    localStorage.setItem("theme", theme);
+
+    const applySystemTheme = () => {
+      const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.setAttribute("data-theme", prefersDark ? "dark" : "light");
+    };
+
+    if (theme === "system") {
+      applySystemTheme();
+      const mq = window.matchMedia("(prefers-color-scheme: dark)");
+      mq.addEventListener("change", applySystemTheme);
+      return () => mq.removeEventListener("change", applySystemTheme);
+    }
+
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+
+  // 🔹 Load the sidebar's chat list once logged in, and open the most
+  // recent chat (or create a fresh one if this user has none yet).
+  useEffect(() => {
+    if (!token) return;
+
+    (async () => {
+      try {
+        const chatList = await fetchChats();
+        setChats(chatList);
+
+        if (chatList.length > 0) {
+          const mostRecent = chatList[0];
+          setActiveChatId(mostRecent.id);
+          const chat = await fetchChat(mostRecent.id);
+          setMessages(chat.messages || []);
+        } else {
+          const chat = await createChat();
+          setChats([{ id: chat.id, title: chat.title, updatedAt: chat.updatedAt }]);
+          setActiveChatId(chat.id);
+        }
+      } catch (err) {
+        console.error("Failed to load chats:", err);
+      }
+    })();
+  }, [token]);
+
   // 🔹 LOGIN
   const login = () => {
     if (isExtension) {
@@ -193,14 +246,74 @@ function App() {
       const res = await chatGpt(inputText, file);
 
       const botMessage = { id: makeId(), type: "gpt", message: res.message };
-      setMessages([...history, botMessage]);
+      const finalMessages = [...history, botMessage];
+      setMessages(finalMessages);
+      persistMessages(finalMessages);
     } catch (error) {
-      setMessages([
+      const finalMessages = [
         ...history,
         { id: makeId(), type: "gpt", message: "❌ Error fetching response" },
-      ]);
+      ];
+      setMessages(finalMessages);
+      persistMessages(finalMessages);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Saves the current message list to the backend under activeChatId, then
+  // refreshes the sidebar list so titles/ordering stay up to date.
+  const persistMessages = async (msgs) => {
+    if (!activeChatId) return;
+    try {
+      await saveChatMessages(activeChatId, msgs);
+      const updatedChats = await fetchChats();
+      setChats(updatedChats);
+    } catch (err) {
+      console.error("Failed to save chat:", err);
+    }
+  };
+
+  // 🔹 Sidebar: start a new empty chat
+  const handleNewChat = async () => {
+    try {
+      const chat = await createChat();
+      setChats((prev) => [{ id: chat.id, title: chat.title, updatedAt: chat.updatedAt }, ...prev]);
+      setActiveChatId(chat.id);
+      setMessages([]);
+    } catch (err) {
+      console.error("Failed to create chat:", err);
+    }
+  };
+
+  // 🔹 Sidebar: switch to a past chat, loading its full message history
+  const handleSelectChat = async (chatId) => {
+    try {
+      const chat = await fetchChat(chatId);
+      setActiveChatId(chatId);
+      setMessages(chat.messages || []);
+    } catch (err) {
+      console.error("Failed to load chat:", err);
+    }
+  };
+
+  // 🔹 Sidebar: delete a chat; if it was the active one, fall back to another
+  // existing chat or start a fresh one.
+  const handleDeleteChat = async (chatId) => {
+    try {
+      await deleteChat(chatId);
+      const remaining = chats.filter((c) => c.id !== chatId);
+      setChats(remaining);
+
+      if (chatId === activeChatId) {
+        if (remaining.length > 0) {
+          handleSelectChat(remaining[0].id);
+        } else {
+          handleNewChat();
+        }
+      }
+    } catch (err) {
+      console.error("Failed to delete chat:", err);
     }
   };
 
@@ -273,18 +386,32 @@ function App() {
   };
 
   return (
-    <Flex style={{ height: "100vh" }} justify="center">
+    <Flex style={{ height: "100vh" }}>
+      <Sidebar
+        chats={chats}
+        activeChatId={activeChatId}
+        onNewChat={handleNewChat}
+        onSelectChat={handleSelectChat}
+        onDeleteChat={handleDeleteChat}
+      />
+
       <Layout style={{ width: "100%" }}>
         <Header className="app-header">
           <div className="app-brand">
-            <img src={smallLogo} alt="ChatHaven" className="app-logo" />
-            <h2 className="app-title">ChatHaven</h2>
+            <img src={Logo} alt="ChatHaven" className="app-logo" />
+            <h3 className="app-title">ChatHaven</h3>
           </div>
 
           <Dropdown
             menu={{
-              items: [{ key: "logout", label: "Logout" }],
-              onClick: logout
+              items: [
+                { key: "settings", label: "Settings" },
+                { key: "logout", label: "Logout" },
+              ],
+              onClick: ({ key }) => {
+                if (key === "settings") setSettingsOpen(true);
+                if (key === "logout") logout();
+              },
             }}
             trigger={["click"]}
             placement="bottomRight"
@@ -294,6 +421,13 @@ function App() {
             </div>
           </Dropdown>
         </Header>
+
+        <SettingsModal
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          theme={theme}
+          onThemeChange={setTheme}
+        />
 
         <div ref={containerRef} style={{ flex: 1, overflowY: "auto" }}>
           {messages.length === 0 ? (
