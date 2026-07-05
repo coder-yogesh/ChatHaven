@@ -1,5 +1,6 @@
-import React, { useRef } from "react";
+import React, { useRef, useState } from "react";
 import { PlusOutlined, AudioOutlined, ArrowUpOutlined, CloseOutlined } from "@ant-design/icons";
+import ImageModal from "./ImageModal";
 
 /**
  * ChatGPT-style input bar:
@@ -23,6 +24,7 @@ export default function ChatInput({
   loading,
 }) {
   const fileInputRef = useRef(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const previewUrl = imageFile ? URL.createObjectURL(imageFile) : null;
 
   const handleFileChange = (e) => {
@@ -52,7 +54,12 @@ export default function ChatInput({
         {previewUrl && (
           <div className="image-preview-row">
             <div className="image-preview-card">
-              <img src={previewUrl} alt="attachment preview" />
+              <img
+                src={previewUrl}
+                alt="attachment preview"
+                onClick={() => setPreviewOpen(true)}
+                style={{ cursor: "zoom-in" }}
+              />
               <button className="image-preview-close" onClick={onImageRemove} title="Remove image">
                 <CloseOutlined />
               </button>
@@ -92,6 +99,8 @@ export default function ChatInput({
           </button>
         </div>
       </div>
+
+      <ImageModal src={previewOpen ? previewUrl : null} onClose={() => setPreviewOpen(false)} />
     </div>
   );
 }
