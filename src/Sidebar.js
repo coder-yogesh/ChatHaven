@@ -1,6 +1,5 @@
 import React, { useState } from "react";
 import { PlusOutlined, SearchOutlined, MessageOutlined, DeleteOutlined } from "@ant-design/icons";
-import Logo from './assets/large.png';
 
 /**
  * Left sidebar: "New chat" / "Search chats" actions + a scrollable list of
@@ -15,7 +14,7 @@ import Logo from './assets/large.png';
  *  onDeleteChat(id)
  *  onSearch(query)  - optional, wires the search box
  */
-export default function Sidebar({ chats, activeChatId, onNewChat, onSelectChat, onDeleteChat, onSearch }) {
+export default function Sidebar({ chats, activeChatId, onNewChat, onSelectChat, onDeleteChat, onSearch, open, onClose }) {
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
 
@@ -24,11 +23,11 @@ export default function Sidebar({ chats, activeChatId, onNewChat, onSelectChat, 
     : chats;
 
   return (
-    <div className="sidebar">
-      <div className="app-brand">
-        <img src={Logo} alt="ChatHaven" className="app-logo" />
-        {/* <h3 className="app-title">ChatHaven</h3> */}
-      </div>
+    <>
+      {/* Mobile-only backdrop — tapping it closes the drawer. Invisible/inert on desktop via CSS. */}
+      {open && <div className="sidebar-backdrop" onClick={onClose} />}
+
+      <div className={`sidebar ${open ? "open" : ""}`}>
       <div className="sidebar-top">
         <button className="sidebar-action" onClick={onNewChat}>
           <PlusOutlined /> New chat
@@ -81,6 +80,7 @@ export default function Sidebar({ chats, activeChatId, onNewChat, onSelectChat, 
           </div>
         ))}
       </div>
-    </div>
+      </div>
+    </>
   );
 }

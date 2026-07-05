@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import Googlelogo from "./assets/Google Logo.png";
-import Logo from "./assets/large-removebg-preview.png";
+import Logo from "./assets/large.png";
 import { Avatar, Button, Col, Dropdown, Flex, Layout } from "antd";
+import { MenuOutlined } from "@ant-design/icons";
 import { chatGpt, fetchChats, createChat, fetchChat, saveChatMessages, deleteChat } from "./services/api";
 import { Content, Header } from "antd/es/layout/layout";
 import { jwtDecode } from "jwt-decode";
@@ -39,6 +40,7 @@ function App() {
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "dark");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
 
   useEffect(() => {
@@ -281,6 +283,7 @@ function App() {
       setChats((prev) => [{ id: chat.id, title: chat.title, updatedAt: chat.updatedAt }, ...prev]);
       setActiveChatId(chat.id);
       setMessages([]);
+      setSidebarOpen(false); // no-op on desktop, closes the drawer on mobile
     } catch (err) {
       console.error("Failed to create chat:", err);
     }
@@ -292,6 +295,7 @@ function App() {
       const chat = await fetchChat(chatId);
       setActiveChatId(chatId);
       setMessages(chat.messages || []);
+      setSidebarOpen(false);
     } catch (err) {
       console.error("Failed to load chat:", err);
     }
@@ -393,11 +397,20 @@ function App() {
         onNewChat={handleNewChat}
         onSelectChat={handleSelectChat}
         onDeleteChat={handleDeleteChat}
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
       />
 
       <Layout style={{ width: "100%" }}>
         <Header className="app-header">
           <div className="app-brand">
+            <button
+              className="hamburger-btn"
+              onClick={() => setSidebarOpen(true)}
+              title="Open menu"
+            >
+              <MenuOutlined />
+            </button>
             <img src={Logo} alt="ChatHaven" className="app-logo" />
             <h3 className="app-title">ChatHaven</h3>
           </div>
