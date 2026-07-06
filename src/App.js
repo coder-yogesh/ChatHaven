@@ -18,7 +18,7 @@ const isExtension =
   typeof chrome.runtime !== "undefined" &&
   typeof chrome.runtime.id !== "undefined";
 
-const API_URL = process.env.REACT_APP_API_URL || "http://localhost:4000/";
+const API_URL = process.env.REACT_APP_API_URL || "http://localhost:4000";
 
 // Stable id per message so feedback (like/dislike) can reference a specific
 // message even after edits/regenerations reshuffle the array.
@@ -208,7 +208,7 @@ function App() {
         }
       });
     } else {
-      window.location.href = `${API_URL}api/auth/google`;
+      window.location.href = `${API_URL}/api/auth/google`;
     }
   };
 
