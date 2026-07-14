@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import Googlelogo from "./assets/Google Logo.png";
 import Logo from "./assets/large.png";
-import { Avatar, Button, Col, Dropdown, Flex, Layout } from "antd";
+import { Avatar, Button, Col, Dropdown, Flex, Layout, message as antMessage } from "antd";
 import { MenuOutlined } from "@ant-design/icons";
-import { chatGpt, fetchChats, createChat, fetchChat, saveChatMessages, deleteChat } from "./services/api";
+import { chatGpt, fetchChats, createChat, fetchChat, saveChatMessages, deleteChat, validateGroqKey } from "./services/api";
 import { Content, Header } from "antd/es/layout/layout";
 import { jwtDecode } from "jwt-decode";
 import ChatMessages from "./ChatMessage";
@@ -41,6 +41,47 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "dark");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // 🔑 Each user brings their own Groq API key (see backend helper.js) so
+  // requests count against *their* free-tier limits, not one shared key.
+  // Lives only in this browser's localStorage — chatGpt() in services/api.js
+  // reads it straight from there and attaches it per-request.
+  const [groqKey, setGroqKey] = useState(() => localStorage.getItem("groq_api_key") || "");
+  const [groqKeyStatus, setGroqKeyStatus] = useState("unknown"); // unknown | checking | valid | invalid
+
+  const handleGroqKeyChange = (key) => {
+    setGroqKey(key);
+    localStorage.setItem("groq_api_key", key);
+    setGroqKeyStatus("unknown");
+  };
+
+  const handleValidateGroqKey = async () => {
+    if (!groqKey.trim()) return;
+    setGroqKeyStatus("checking");
+    try {
+      const result = await validateGroqKey(groqKey.trim());
+      setGroqKeyStatus(result.valid ? "valid" : "invalid");
+    } catch (err) {
+      console.error("Failed to validate Groq key:", err);
+      setGroqKeyStatus("unknown");
+      antMessage.error("Couldn't reach the server to check that key.");
+    }
+  };
+
+  // 🔎 Chat search (title + message content). Title matches are instant;
+  // content matches require each chat's messages, which aren't loaded for
+  // chats you haven't opened yet — chatCacheRef fills in lazily as chats
+  // are opened, and runContentSearch() fetches whatever's still missing.
+  const [searchQuery, setSearchQuery] = useState("");
+  const [contentMatches, setContentMatches] = useState({});
+  const [searching, setSearching] = useState(false);
+  const chatCacheRef = useRef({});
+  const searchTokenRef = useRef(0);
+  const searchDebounceRef = useRef(null);
+
+  const cacheChatMessages = (chatId, msgs) => {
+    if (chatId) chatCacheRef.current[chatId] = msgs;
+  };
 
 
   useEffect(() => {
@@ -164,10 +205,12 @@ function App() {
           setActiveChatId(mostRecent.id);
           const chat = await fetchChat(mostRecent.id);
           setMessages(chat.messages || []);
+          cacheChatMessages(mostRecent.id, chat.messages || []);
         } else {
           const chat = await createChat();
           setChats([{ id: chat.id, title: chat.title, updatedAt: chat.updatedAt }]);
           setActiveChatId(chat.id);
+          cacheChatMessages(chat.id, []);
         }
       } catch (err) {
         console.error("Failed to load chats:", err);
@@ -250,14 +293,26 @@ function App() {
       const botMessage = { id: makeId(), type: "gpt", message: res.message };
       const finalMessages = [...history, botMessage];
       setMessages(finalMessages);
+      cacheChatMessages(activeChatId, finalMessages);
       persistMessages(finalMessages);
     } catch (error) {
+      const isKeyIssue = error.code === "NO_GROQ_KEY" || error.code === "INVALID_GROQ_KEY";
       const finalMessages = [
         ...history,
-        { id: makeId(), type: "gpt", message: "❌ Error fetching response" },
+        {
+          id: makeId(),
+          type: "gpt",
+          message: isKeyIssue ? error.message : "❌ Error fetching response",
+        },
       ];
       setMessages(finalMessages);
+      cacheChatMessages(activeChatId, finalMessages);
       persistMessages(finalMessages);
+
+      if (isKeyIssue) {
+        if (error.code === "INVALID_GROQ_KEY") setGroqKeyStatus("invalid");
+        setSettingsOpen(true);
+      }
     } finally {
       setLoading(false);
     }
@@ -283,6 +338,8 @@ function App() {
       setChats((prev) => [{ id: chat.id, title: chat.title, updatedAt: chat.updatedAt }, ...prev]);
       setActiveChatId(chat.id);
       setMessages([]);
+      cacheChatMessages(chat.id, []);
+      setSearchQuery("");
       setSidebarOpen(false); // no-op on desktop, closes the drawer on mobile
     } catch (err) {
       console.error("Failed to create chat:", err);
@@ -295,6 +352,8 @@ function App() {
       const chat = await fetchChat(chatId);
       setActiveChatId(chatId);
       setMessages(chat.messages || []);
+      cacheChatMessages(chatId, chat.messages || []);
+      setSearchQuery("");
       setSidebarOpen(false);
     } catch (err) {
       console.error("Failed to load chat:", err);
@@ -306,6 +365,7 @@ function App() {
   const handleDeleteChat = async (chatId) => {
     try {
       await deleteChat(chatId);
+      delete chatCacheRef.current[chatId];
       const remaining = chats.filter((c) => c.id !== chatId);
       setChats(remaining);
 
@@ -320,6 +380,61 @@ function App() {
       console.error("Failed to delete chat:", err);
     }
   };
+
+  // 🔎 Search: as the user types, filter chats by title instantly, and —
+  // after a short debounce — also check each chat's message content,
+  // fetching (and caching) whichever chats haven't been opened yet. A
+  // token guards against a slow search overwriting a newer one's results.
+  const handleSearchChange = (query) => {
+    setSearchQuery(query);
+
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+
+    if (!query.trim()) {
+      setContentMatches({});
+      setSearching(false);
+      return;
+    }
+
+    setSearching(true);
+    searchDebounceRef.current = setTimeout(() => runContentSearch(query), 300);
+  };
+
+  const runContentSearch = async (query) => {
+    const token = ++searchTokenRef.current;
+    const q = query.toLowerCase();
+
+    const results = await Promise.all(
+      chats.map(async (chat) => {
+        let msgs = chatCacheRef.current[chat.id];
+        if (!msgs) {
+          try {
+            const full = await fetchChat(chat.id);
+            msgs = full.messages || [];
+            cacheChatMessages(chat.id, msgs);
+          } catch (err) {
+            console.error("Search: failed to load chat", chat.id, err);
+            msgs = [];
+          }
+        }
+        const hit = msgs.find((m) => m.message?.toLowerCase().includes(q));
+        return hit ? [chat.id, hit.message] : null;
+      })
+    );
+
+    if (token !== searchTokenRef.current) return; // a newer search superseded this one
+
+    setContentMatches(Object.fromEntries(results.filter(Boolean)));
+    setSearching(false);
+  };
+
+  const visibleChats = searchQuery.trim()
+    ? chats.filter(
+        (c) =>
+          c.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          contentMatches[c.id]
+      )
+    : chats;
 
   const submit = async () => {
     if (!q.trim() && !imageFile) return;
@@ -392,11 +507,15 @@ function App() {
   return (
     <Flex style={{ height: "100vh" }}>
       <Sidebar
-        chats={chats}
+        chats={visibleChats}
         activeChatId={activeChatId}
         onNewChat={handleNewChat}
         onSelectChat={handleSelectChat}
         onDeleteChat={handleDeleteChat}
+        searchQuery={searchQuery}
+        onSearchChange={handleSearchChange}
+        contentMatches={contentMatches}
+        searching={searching}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />
@@ -440,7 +559,20 @@ function App() {
           onClose={() => setSettingsOpen(false)}
           theme={theme}
           onThemeChange={setTheme}
+          groqKey={groqKey}
+          onGroqKeyChange={handleGroqKeyChange}
+          groqKeyStatus={groqKeyStatus}
+          onValidateGroqKey={handleValidateGroqKey}
         />
+
+        {!groqKey.trim() && (
+          <div className="groq-key-banner">
+            <span>Add your Groq API key to start chatting — it's free and stays in this browser.</span>
+            <button className="groq-key-banner-btn" onClick={() => setSettingsOpen(true)}>
+              Add key
+            </button>
+          </div>
+        )}
 
         <div ref={containerRef} style={{ flex: 1, overflowY: "auto" }}>
           {messages.length === 0 ? (

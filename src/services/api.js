@@ -72,14 +72,41 @@ export async function chatGpt(prompt, imageFile) {
   form.append("prompt", prompt);
   if (imageFile) form.append("image", imageFile);
 
+  // Each user brings their own Groq key so requests count against *their*
+  // free-tier limits, not one shared key. It lives only in this browser's
+  // localStorage and rides along per-request via this header — the backend
+  // never stores it. See SettingsModal for where it's set.
+  const groqKey = localStorage.getItem("groq_api_key") || "";
+
   const res = await fetch(`${API_BASE}/chatgpt`, {
     method: "POST",
+    headers: groqKey ? { "x-groq-api-key": groqKey } : undefined,
     body: form,
   });
 
   const data = await res.json();
-  if (!data.success) throw new Error(data.error || "Request failed");
+  if (!data.success) {
+    const err = new Error(data.error || "Request failed");
+    // "NO_GROQ_KEY" / "INVALID_GROQ_KEY" — lets callers react differently
+    // (e.g. open Settings) instead of showing a generic failure.
+    if (data.code) err.code = data.code;
+    throw err;
+  }
   return data;
+}
+
+/**
+ * Checks whether a Groq API key actually works, without spending a chat
+ * completion on it — used by the Settings modal for instant feedback.
+ * @param {string} key
+ * @returns {Promise<{ success: boolean, valid?: boolean, error?: string }>}
+ */
+export async function validateGroqKey(key) {
+  const res = await fetch(`${API_BASE}/validate-groq-key`, {
+    method: "POST",
+    headers: { "x-groq-api-key": key },
+  });
+  return res.json();
 }
 
 /** List all chats for the sidebar, newest first. */
